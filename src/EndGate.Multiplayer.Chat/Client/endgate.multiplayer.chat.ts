@@ -46,7 +46,6 @@ module EndGate.Multiplayer {
                 this.OnMessageReceived.Trigger(new ChatMessage(from, message, type));
             });
             this.Proxy.on("chatUserJoined", (data: any) => {
-                console.log("user joined", data);
                 this.OnUserJoined.Trigger(data.Name);
             });
         }
@@ -104,8 +103,8 @@ module EndGate.Multiplayer {
                 this.AddMessage(chat);
             });
 
-            serverAdapter.OnUserJoined.Bind((chat: string) => {
-                console.log(chat);
+            serverAdapter.OnUserJoined.Bind((name: string) => {
+                this.OnUserJoined.Trigger(name);
             });
 
             serverAdapter.OnConnected.Bind((connected: ChatConnected) => {
