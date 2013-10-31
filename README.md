@@ -1,0 +1,1 @@
+Chat plugin for EndGate
