@@ -6,9 +6,12 @@
     (function (Multiplayer) {
         var ChatAdapter = (function () {
             function ChatAdapter() {
+                this.Initialize($.connection.hub, ($.connection).chat);
+            }
+            ChatAdapter.prototype.Initialize = function (connection, proxy) {
                 var _this = this;
-                this.Connection = $.connection.hub;
-                this.Proxy = ($.connection).chat;
+                this.Connection = connection;
+                this.Proxy = proxy;
 
                 var savedProxyInvoke = this.Proxy.invoke;
 
@@ -25,7 +28,7 @@
                 (this.Connection).stateChanged(function (state) {
                     if (state.oldState === 0 && state.newState === $.signalR.connectionState.connected) {
                         (_this.Proxy).invoke("join").done(function (data) {
-                            _this.OnConnected.Trigger(new ChatConnected(data.Name, data.Id));
+                            _this.OnConnected.Trigger(new ChatConnected(data.Name, data.Id, data));
                         }).fail(function (e, g) {
                             console.log(e, g);
                         });
@@ -33,14 +36,15 @@
                 });
 
                 this.Wire();
-            }
+            };
+
             ChatAdapter.prototype.Wire = function () {
                 var _this = this;
                 this.Proxy.on("chatMessage", function (from, message, type) {
                     _this.OnMessageReceived.Trigger(new ChatMessage(from, message, type));
                 });
                 this.Proxy.on("chatUserJoined", function (data) {
-                    _this.OnUserJoined.Trigger(data.Name);
+                    _this.OnUserJoined.Trigger(data);
                 });
             };
             return ChatAdapter;
@@ -68,9 +72,10 @@
         Multiplayer.ChatMessage = ChatMessage;
 
         var ChatConnected = (function () {
-            function ChatConnected(Name, Id) {
+            function ChatConnected(Name, Id, Source) {
                 this.Name = Name;
                 this.Id = Id;
+                this.Source = Source;
             }
             return ChatConnected;
         })();
@@ -97,6 +102,7 @@
                 this.OnMessageReceived = new eg.EventHandler1();
                 this.OnUserJoined = new eg.EventHandler1();
                 //drop the chat box in there
+                this._chatHashGenerator = new ChatHashGenerator();
                 this._chatContainer = $("<ul>").attr("id", "eg-chat");
                 $("body").append(this._chatContainer);
                 var serverAdapter = new ChatAdapter();
@@ -110,7 +116,7 @@
                 });
 
                 serverAdapter.OnConnected.Bind(function (connected) {
-                    _this._name = connected.Name;
+                    _this._self = connected;
                 });
 
                 this._chatBoxContainer.append(this._chatBox);
@@ -120,7 +126,7 @@
                             if (_this._chatBoxVisible) {
                                 var message = _this._chatBox.val();
                                 if (message) {
-                                    _this.AddMessage(new ChatMessage(_this._name, message, ChatMessageType.User));
+                                    _this.AddMessage(new ChatMessage(_this._self, message, ChatMessageType.User));
                                     serverAdapter.Proxy.invoke("sendMessage", message);
                                 }
                                 _this.HideChatBox();
@@ -171,7 +177,7 @@
 
                 if (!chatMessage._Handled) {
                     if (chatMessage.Type === ChatMessageType.User) {
-                        var color = this._colors[this.GetHashCode(chatMessage.From) % this._colors.length], playerName = $("<span>").text(chatMessage.From).css("color", color), message = $("<span>").append($("<div/>").text(chatMessage.Message).html().replace(/\"/g, "&quot;"));
+                        var color = this._colors[this._chatHashGenerator.Hash(chatMessage.From.Name) % this._colors.length], playerName = $("<span>").text(chatMessage.From.Name).css("color", color), message = $("<span>").append($("<div/>").text(chatMessage.Message).html().replace(/\"/g, "&quot;"));
 
                         if (this._chatBoxVisible) {
                             $("<li>").append(playerName).append($("<span>").text(": ")).append(message).insertBefore(this._chatBoxContainer);
@@ -189,23 +195,53 @@
                     }
                 }
             };
-
-            ChatHandler.prototype.GetHashCode = function (name) {
-                var hash = 0, i, c, l;
-                if (name.length === 0)
-                    return hash;
-                for (i = 0, l = name.length; i < l; i++) {
-                    c = name.charCodeAt(i);
-                    hash = ((hash << 5) - hash) + c;
-                    hash |= 0;
-                }
-                return hash;
-            };
             return ChatHandler;
         })();
         Multiplayer.ChatHandler = ChatHandler;
+
+        var ChatHashGenerator = (function () {
+            function ChatHashGenerator() {
+            }
+            ChatHashGenerator.prototype.ChatHashGenerator = function () {
+                this._types = {
+                    'string': this.HashString,
+                    'number': this.HashString,
+                    'boolean': this.HashString,
+                    'object': this.HashObject
+                };
+            };
+
+            ChatHashGenerator.prototype.HashString = function (source) {
+                var str = source.toString(), result = 0;
+
+                for (var i = 0; i < str.length; i++) {
+                    result = (((result << 5) - result) + str.charCodeAt(i)) & 0xFFFFFFFF;
+                }
+
+                return result;
+            };
+
+            ChatHashGenerator.prototype.HashObject = function (object) {
+                var result = 0;
+                for (var property in object) {
+                    if (object.hasOwnProperty(property)) {
+                        result += this.HashString(property + this.Hash(object[property]));
+                    }
+                }
+
+                return result;
+            };
+
+            ChatHashGenerator.prototype.Hash = function (value) {
+                var type = typeof (value);
+
+                return value != null && this._types[type] ? this._types[type](value) + this.Hash(type) : 0;
+            };
+            return ChatHashGenerator;
+        })();
 
         Multiplayer.Chat = new EndGate.Multiplayer.ChatHandler();
     })(EndGate.Multiplayer || (EndGate.Multiplayer = {}));
     var Multiplayer = EndGate.Multiplayer;
 })(EndGate || (EndGate = {}));
+//# sourceMappingURL=endgate.multiplayer.chat.js.map

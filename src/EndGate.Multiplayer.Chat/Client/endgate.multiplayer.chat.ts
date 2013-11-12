@@ -10,8 +10,12 @@ module EndGate.Multiplayer {
         public Connection: HubConnection;
 
         constructor() {
-            this.Connection = $.connection.hub;
-            this.Proxy = (<any>$.connection).chat;
+            this.Initialize($.connection.hub, (<any>$.connection).chat);
+        }
+
+        public Initialize(connection: HubConnection, proxy: HubProxy): void {
+            this.Connection = connection;
+            this.Proxy = proxy;
 
             var savedProxyInvoke = this.Proxy.invoke;
 
@@ -29,7 +33,7 @@ module EndGate.Multiplayer {
                 if (state.oldState === 0 && state.newState === $.signalR.connectionState.connected) {
                     (<any>this.Proxy).invoke("join")
                         .done((data: any) => {
-                            this.OnConnected.Trigger(new ChatConnected(data.Name, data.Id));
+                            this.OnConnected.Trigger(new ChatConnected(data.Name, data.Id, data));
                         })
                         .fail((e: any, g: any) => {
                             console.log(e, g);
@@ -42,11 +46,11 @@ module EndGate.Multiplayer {
         }
 
         private Wire(): void {
-            this.Proxy.on("chatMessage", (from: string, message: string, type: number) => {
+            this.Proxy.on("chatMessage", (from: any, message: string, type: number) => {
                 this.OnMessageReceived.Trigger(new ChatMessage(from, message, type));
             });
             this.Proxy.on("chatUserJoined", (data: any) => {
-                this.OnUserJoined.Trigger(data.Name);
+                this.OnUserJoined.Trigger(data);
             });
         }
     }
@@ -58,7 +62,7 @@ module EndGate.Multiplayer {
 
     export class ChatMessage {
         public _Handled: boolean = false;
-        constructor(public From: string, public Message: string, public Type: ChatMessageType) { }
+        constructor(public From: any, public Message: string, public Type: ChatMessageType) { }
 
         public PreventDefault(): void {
             this._Handled = true;
@@ -66,7 +70,7 @@ module EndGate.Multiplayer {
     }
 
     export class ChatConnected {
-        constructor(public Name: string, public Id: any) {
+        constructor(public Name: string, public Id: any, public Source: any) {
         }
     }
 
@@ -76,7 +80,7 @@ module EndGate.Multiplayer {
         private _chatBox: JQuery = $("<input>").attr("id", "chatbox").attr("type", "input").attr("autocomplete", "off");
         private _chatBoxContainer: JQuery = $("<li>");
         private _chatBoxVisible: boolean = false;
-        private _name: string;
+        private _self: any;
         private _colors: string[] = [
             eg.Graphics.Color.Red.toString(),
             eg.Graphics.Color.Orange.toString(),
@@ -87,6 +91,7 @@ module EndGate.Multiplayer {
             eg.Graphics.Color.White.toString(),
             eg.Graphics.Color.Cyan.toString()
         ];
+        private _chatHashGenerator: ChatHashGenerator;
 
         private _systemMessageColor: string = eg.Graphics.Color.Yellow.toString();
 
@@ -95,6 +100,7 @@ module EndGate.Multiplayer {
 
         constructor() {
             //drop the chat box in there
+            this._chatHashGenerator = new ChatHashGenerator();
             this._chatContainer = $("<ul>").attr("id", "eg-chat");
             $("body").append(this._chatContainer);
             var serverAdapter = new ChatAdapter();
@@ -103,12 +109,12 @@ module EndGate.Multiplayer {
                 this.AddMessage(chat);
             });
 
-            serverAdapter.OnUserJoined.Bind((name: string) => {
+            serverAdapter.OnUserJoined.Bind((name: any) => {
                 this.OnUserJoined.Trigger(name);
             });
 
-            serverAdapter.OnConnected.Bind((connected: ChatConnected) => {
-                this._name = connected.Name;
+            serverAdapter.OnConnected.Bind((connected: any) => {
+                this._self = connected;
             });
 
             this._chatBoxContainer.append(this._chatBox);
@@ -119,7 +125,7 @@ module EndGate.Multiplayer {
                         if (this._chatBoxVisible) {
                             var message = this._chatBox.val();
                             if (message) {
-                                this.AddMessage(new ChatMessage(this._name, message, ChatMessageType.User));
+                                this.AddMessage(new ChatMessage(this._self, message, ChatMessageType.User));
                                 serverAdapter.Proxy.invoke("sendMessage", message);
                             }
                             this.HideChatBox();
@@ -174,8 +180,8 @@ module EndGate.Multiplayer {
             if (!chatMessage._Handled) {
                 //User message
                 if (chatMessage.Type === ChatMessageType.User) {
-                    var color = this._colors[this.GetHashCode(chatMessage.From) % this._colors.length],
-                        playerName = $("<span>").text(chatMessage.From).css("color", color),
+                    var color = this._colors[this._chatHashGenerator.Hash(chatMessage.From.Name) % this._colors.length],
+                        playerName = $("<span>").text(chatMessage.From.Name).css("color", color),
                         message = $("<span>").append($("<div/>").text(chatMessage.Message).html().replace(/\"/g, "&quot;"));
 
                     //only insert new items before the chat box so that the chat box stays at the
@@ -206,16 +212,46 @@ module EndGate.Multiplayer {
                 }
             }
         }
+    }
 
-        private GetHashCode(name: string): number {
-            var hash = 0, i, c, l;
-            if (name.length === 0) return hash;
-            for (i = 0, l = name.length; i < l; i++) {
-                c = name.charCodeAt(i);
-                hash = ((hash << 5) - hash) + c;
-                hash |= 0;
+    class ChatHashGenerator {
+        private _types: { [type: string]: (s) => number };
+
+        public ChatHashGenerator() {
+            this._types = {
+                'string': this.HashString,
+                'number': this.HashString,
+                'boolean': this.HashString,
+                'object': this.HashObject
+            };
+        }
+
+        private HashString(source: string): number {
+            var str: string = source.toString(),
+                result: number = 0;
+
+            for (var i = 0; i < str.length; i++) {
+                result = (((result << 5) - result) + str.charCodeAt(i)) & 0xFFFFFFFF;
             }
-            return hash;
+
+            return result;
+        }
+
+        private HashObject(object: any): number {
+            var result = 0;
+            for (var property in object) {
+                if (object.hasOwnProperty(property)) {
+                    result += this.HashString(property + this.Hash(object[property]));
+                }
+            }
+
+            return result;
+        }
+
+        public Hash(value: any): number {
+            var type = typeof (value);
+
+            return value != null && this._types[type] ? this._types[type](value) + this.Hash(type) : 0;
         }
     }
 
